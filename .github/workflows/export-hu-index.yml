@@ -1,0 +1,104 @@
+name: Export HU index HTML
+
+on:
+  push:
+    branches: [export-hu-index]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download published HU app
+        run: |
+          curl -fSL --retry 4 --retry-delay 2 'https://digomayer.github.io/projeto-hu/app-base.html?download=20260729' -o index.html
+          test -s index.html
+          grep -q '<!DOCTYPE html>' index.html
+
+      - name: Remove insulin administration references
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path=Path('index.html')
+          text=path.read_text(encoding='utf-8')
+
+          for line in (
+              "  {id:'ins_breakfast',value:'Adm insulina (café)',label:'Administração de insulina — café'},\n",
+              "  {id:'ins_lunch',value:'Adm insulina (almoço)',label:'Administração de insulina — almoço'},\n",
+              "  {id:'ins_dinner',value:'Adm insulina (jantar)',label:'Administração de insulina — jantar'},\n",
+          ):
+              if text.count(line)!=1:
+                  raise SystemExit(f'Linha esperada não encontrada exatamente uma vez: {line.strip()}')
+              text=text.replace(line,'',1)
+
+          for fragment in (
+              ',ins_breakfast:{min:80,max:130}',
+              ',ins_lunch:{min:80,max:130}',
+              ',ins_dinner:{min:80,max:130}',
+              ',ins_breakfast:{min:70,max:144}',
+              ',ins_lunch:{min:70,max:144}',
+              ',ins_dinner:{min:70,max:144}',
+              ',ins_breakfast:{min:70,max:95,strictMax:true}',
+              ',ins_lunch:{min:70,max:95,strictMax:true}',
+              ',ins_dinner:{min:70,max:95,strictMax:true}',
+          ):
+              if text.count(fragment)!=1:
+                  raise SystemExit(f'Referência esperada não encontrada exatamente uma vez: {fragment}')
+              text=text.replace(fragment,'',1)
+
+          old="Object.entries(incoming.hgt_moments||{}).forEach(([key,item])=>{moments[key]={...(moments[key]||{}),...(item||{})};});"
+          new="Object.entries(incoming.hgt_moments||{}).forEach(([key,item])=>{if(Object.prototype.hasOwnProperty.call(moments,key))moments[key]={...(moments[key]||{}),...(item||{})};});"
+          if text.count(old)!=1:
+              raise SystemExit('Trecho de compatibilidade JSON não encontrado exatamente uma vez.')
+          text=text.replace(old,new,1)
+
+          path.write_text(text,encoding='utf-8')
+          PY
+
+      - name: Validate standalone HTML
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          text=Path('index.html').read_text(encoding='utf-8')
+          forbidden=[
+              "{id:'ins_breakfast',value:'Adm insulina (café)'",
+              "{id:'ins_lunch',value:'Adm insulina (almoço)'",
+              "{id:'ins_dinner',value:'Adm insulina (jantar)'",
+              'ins_breakfast:{min:',
+              'ins_lunch:{min:',
+              'ins_dinner:{min:',
+              'app-base.html',
+              "fetch('./app-base",
+          ]
+          required=[
+              '<option value="Adm insulina (café)">Adm insulina – café</option>',
+              '<option value="Adm insulina (almoço)">Adm insulina – almoço</option>',
+              '<option value="Adm insulina (jantar)">Adm insulina – jantar</option>',
+              'if(Object.prototype.hasOwnProperty.call(moments,key))',
+              'schemaVersion:12',
+              'certificates-view',
+              'GLUCOSE_MOMENT_DEFS',
+          ]
+          for token in forbidden:
+              if token in text: raise SystemExit('Trecho proibido ainda presente: '+token)
+          for token in required:
+              if token not in text: raise SystemExit('Trecho obrigatório ausente: '+token)
+          scripts=re.findall(r'<script(?:\s[^>]*)?>([\s\S]*?)</script>',text,re.I)
+          js='\n'.join(s for s in scripts if s.strip())
+          Path('/tmp/hu-index.js').write_text(js,encoding='utf-8')
+          subprocess.run(['node','--check','/tmp/hu-index.js'],check=True)
+          print('HTML validado:',len(text.encode('utf-8')),'bytes')
+          PY
+
+      - name: Upload index HTML
+        uses: actions/upload-artifact@v4
+        with:
+          name: hu-facil-index-corrigido
+          path: index.html
+          if-no-files-found: error
+          retention-days: 1
