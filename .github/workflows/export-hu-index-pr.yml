@@ -13,9 +13,10 @@ jobs:
     steps:
       - name: Download published HU app
         run: |
-          curl -fSL --retry 4 --retry-delay 2 'https://digomayer.github.io/projeto-hu/app-base.html?download=20260729' -o index.html
+          curl -fSL --retry 6 --retry-delay 5 'https://digomayer.github.io/projeto-hu/index.html?download=20260729b' -o index.html
           test -s index.html
           grep -q '<!DOCTYPE html>' index.html
+          grep -q 'HU Fácil — Ferramenta extraoficial' index.html
 
       - name: Remove insulin administration references
         shell: bash
